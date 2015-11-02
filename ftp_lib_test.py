@@ -29,6 +29,7 @@ def print_directory_name(name, prefix):
 def print_all_ftp(ftp, prefix='|'):
 
   ftp_list = []
+  ftp.cwd('/')
   ftp.retrlines('LIST',ftp_list.append)
 
   for ftp_object in ftp_list:
