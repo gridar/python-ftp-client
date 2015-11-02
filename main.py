@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-import  logging,  os,  time
+import  logging,  os,  time,  ftplib
+from threading import Thread
 from optparse import OptionParser
 from optparse import OptionGroup
 from ftplib import FTP
-import ftplib
 
 # display the result in the log if the result has some values
 def displayLog(result,  log,  msg):
@@ -29,27 +29,44 @@ def normalizePath(path):
     element = element.replace('(Directory) ',  '')
     element = os.path.normpath(element)
     return element
-    
+
+# add a single element to the ftp server
+def addElement(ftp,  path,  basename,  rootLogger):
+    file = open(path, 'rb')
+    ftp.storbinary('STOR '+basename,  file)
+    file.close()
+    displayLog(path,  rootLogger,  'File added to FTP server :')
+
 # add the elements (added in the local directory) to the FTP server
 def addElementsToFTP(ftp,  elementsAdded,  options,  rootLogger):
-      if len(elementsAdded) > 0:
-            # adding the file to the ftp server
-            for elementAdded in elementsAdded:
-                element = normalizePath(elementAdded)
-                basename = os.path.basename(element)
-                dirname = os.path.dirname(element.replace(options.local_directory,  ''))
+    maxSize = 300000000 # max size for a file, picture, movies, etc.
+    if len(elementsAdded) > 0:
+        # adding the files or directory to the ftp server
+        for elementAdded in elementsAdded:
+            element = normalizePath(elementAdded)
+            basename = os.path.basename(element)
+            dirname = os.path.dirname(element.replace(options.local_directory,  ''))
+            try:
                 ftp.cwd(dirname)
                 elementInDir = ftp.nlst()
                 # check if the element is not already added
-                if str(basename )not in elementInDir:
+                if str(basename) not in elementInDir:
                     if os.path.isfile(element):
-                        file = open(element, 'rb')
-                        ftp.storbinary('STOR '+basename,  file)
-                        file.close()
-                        displayLog(elementAdded,  rootLogger,  'File added to FTP server :')
+                        if os.path.getsize(element) >= maxSize:
+                            # the size of the file is greater than maxSize
+                            # so we run a thread to send this file
+                            t = Thread(target = addElement, args=(ftp,  elementAdded,  basename,  rootLogger))
+                            t.start()
+                            t.join()
+                        else:
+                            # the size of the file is reasonable, we can send it
+                            addElement(ftp,  elementAdded,  basename,  rootLogger)
                     elif os.path.isdir(element):
+                        # adding a new directory
                         ftp.mkd(basename)
                         displayLog(elementAdded,  rootLogger,  'Directory added to FTP server :')
+            except ftplib.error_perm as detail:
+                displayLog(str(detail),  rootLogger,  'Element already added or not found: ')
 
 # remove a directory and all his content
 def removeDirectory(ftp,  directory,  rootLogger):
@@ -91,6 +108,12 @@ def removeElementsFromFTP(ftp,  elementsRemoved,  options,  rootLogger):
                 except ftplib.error_perm as detail:
                     displayLog(str(detail),  rootLogger,  'Element already removed or not found: ')
 
+# update element to the ftp server
+def updateElementsFromFTP(ftp,  elementsUpdated,  options,  rootLogger):
+    removeElementsFromFTP(ftp,  elementsUpdated,  options,  rootLogger)
+    addElementsToFTP(ftp,  elementsUpdated,  options,  rootLogger)
+    
+# spy a directory by detecting a file/direcotry added, removed or updated
 def spyDirectory(options,  rootLogger):
         # retrieving the elements to be compared
         elementsBefore = getElements(options.local_directory,  options.include_subdir)
@@ -130,15 +153,16 @@ def spyDirectory(options,  rootLogger):
             ftp.login(options.ftp_login,  options.ftp_password)
             ftp.cwd(options.ftp_directory)
             
-            # adding, updating and reomving elements from FTP server
+            # adding, updating and removing elements from FTP server
             addElementsToFTP(ftp,  elementsAdded,  options,  rootLogger)
             removeElementsFromFTP(ftp,  elementsRemoved,  options,  rootLogger)
+            updateElementsFromFTP(ftp,  elementsAltered,  options,  rootLogger)
             
             # closing the connection with the FTP server
             ftp.quit()
 
 def main():
-     # setting the logger to log in the console with the WARNING level (by default)
+    # setting the logger to log in the console with the WARNING level (by default)
     rootLogger = logging.getLogger()
     logFormatter = logging.Formatter("%(asctime)s [%(levelname)-5.5s] %(message)s")
     consoleHandler = logging.StreamHandler()
@@ -173,7 +197,7 @@ def main():
         if options.debug== "True":
             # setting the logger to log in the file and in the console with the DEBUG level
             rootLogger.setLevel(logging.DEBUG)
-            fileHandler = logging.FileHandler("{0}{1}.log".format(options.path_log, "surveillance"))
+            fileHandler = logging.FileHandler("{0}{1}.log".format(options.path_log, "ftpsynchro"))
             fileHandler.setFormatter(logFormatter)
             rootLogger.addHandler(fileHandler)        
         
@@ -190,6 +214,7 @@ def main():
     except Exception as e:
         rootLogger.error(e)
 
+# main of the program
 if __name__ == "__main__":
     main()
     
